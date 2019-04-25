@@ -42,9 +42,10 @@ pub enum ScalarListCondition {
 
 impl ScalarCompare for Arc<ScalarField> {
     /// Field is in a given value
-    fn is_in<T>(&self, val: Vec<T>) -> Filter
+    fn is_in<I, T>(&self, val: I) -> Filter
     where
         T: Into<PrismaValue>,
+        I: IntoIterator<Item = T>,
     {
         Filter::from(ScalarFilter {
             field: Arc::clone(self),
@@ -53,9 +54,10 @@ impl ScalarCompare for Arc<ScalarField> {
     }
 
     /// Field is not in a given value
-    fn not_in<T>(&self, val: Vec<T>) -> Filter
+    fn not_in<I, T>(&self, val: I) -> Filter
     where
         T: Into<PrismaValue>,
+        I: IntoIterator<Item = T>,
     {
         Filter::from(ScalarFilter {
             field: Arc::clone(self),

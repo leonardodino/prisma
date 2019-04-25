@@ -1,9 +1,9 @@
+use crate::Transaction;
 use connector::{
     filter::{Filter, NodeSelector},
     ConnectorResult,
 };
 use prisma_models::*;
-use rusqlite::Transaction;
 
 /// Functions to update records in the database.
 pub trait DatabaseUpdate {
@@ -56,7 +56,7 @@ pub trait DatabaseUpdate {
     /// assert_eq!(&PrismaValue::from("Alice"), record.get_field_value("name").unwrap());
     /// ```
     fn execute_update<T>(
-        conn: &Transaction,
+        conn: &mut Transaction,
         node_selector: &NodeSelector,
         non_list_args: &PrismaArgs,
         list_args: &[(T, PrismaListValue)],
@@ -121,7 +121,7 @@ pub trait DatabaseUpdate {
     /// assert_eq!(&PrismaValue::from("Brooke"), record.get_field_value("name").unwrap());
     /// ```
     fn execute_update_many<T>(
-        conn: &Transaction,
+        conn: &mut Transaction,
         model: ModelRef,
         filter: &Filter,
         non_list_args: &PrismaArgs,
@@ -213,7 +213,7 @@ pub trait DatabaseUpdate {
     /// assert_eq!(&PrismaValue::from("A Mouse Blog"), record.get_field_value("name").unwrap());
     /// ```
     fn execute_nested_update<T>(
-        conn: &Transaction,
+        conn: &mut Transaction,
         parent_id: &GraphqlId,
         node_selector: &Option<NodeSelector>,
         relation_field: RelationFieldRef,
@@ -308,7 +308,7 @@ pub trait DatabaseUpdate {
     /// }
     /// ```
     fn execute_nested_update_many<T>(
-        conn: &Transaction,
+        conn: &mut Transaction,
         parent_id: &GraphqlId,
         filter: &Option<Filter>,
         relation_field: RelationFieldRef,
@@ -363,7 +363,7 @@ pub trait DatabaseUpdate {
     /// assert_eq!(2, Sqlite::count(&trans, "User_cats", ConditionTree::default()).unwrap())
     /// ```
     fn update_list_args<T>(
-        conn: &Transaction,
+        conn: &mut Transaction,
         ids: &[GraphqlId],
         model: ModelRef,
         list_args: &[(T, PrismaListValue)],

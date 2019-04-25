@@ -1,7 +1,6 @@
-use crate::mutaction::NestedActions;
+use crate::{mutaction::NestedActions, Transaction};
 use connector::{filter::NodeSelector, ConnectorResult};
 use prisma_models::{GraphqlId, RelationFieldRef};
-use rusqlite::Transaction;
 
 /// Functions to connect and disconnect records in the database.
 pub trait DatabaseRelation {
@@ -97,7 +96,7 @@ pub trait DatabaseRelation {
     /// );
     /// ```
     fn execute_connect(
-        conn: &Transaction,
+        conn: &mut Transaction,
         parent_id: &GraphqlId,
         actions: &NestedActions,
         node_selector: &NodeSelector,
@@ -198,7 +197,7 @@ pub trait DatabaseRelation {
     /// assert!(from_parent.is_empty());
     /// ```
     fn execute_disconnect(
-        conn: &Transaction,
+        conn: &mut Transaction,
         parent_id: &GraphqlId,
         actions: &NestedActions,
         node_selector: &Option<NodeSelector>,
@@ -207,7 +206,7 @@ pub trait DatabaseRelation {
     /// Connects multiple records into the parent. Rules from `execute_connect`
     /// apply.
     fn execute_set(
-        conn: &Transaction,
+        conn: &mut Transaction,
         parent_id: &GraphqlId,
         actions: &NestedActions,
         node_selectors: &Vec<NodeSelector>,

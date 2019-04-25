@@ -1,16 +1,17 @@
 mod mutaction_executor;
-mod read;
 mod resolver;
 mod write;
 
-use crate::{Connection, TransactionalExecutor};
-use chrono::{DateTime, Utc};
+use crate::*;
 use connector::*;
-use prisma_models::prelude::*;
+use prisma_models::{ProjectRef, TypeIdentifier};
+use prisma_query::{
+    ast::{Query, Select},
+    visitor::{self, Visitor},
+};
 use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::{types::Type, Error as RusqliteError, Row, Transaction, NO_PARAMS};
+use rusqlite::{Connection, Transaction as SqliteTransaction, NO_PARAMS};
 use std::collections::HashSet;
-use uuid::Uuid;
 
 type Pool = r2d2::Pool<SqliteConnectionManager>;
 
@@ -20,31 +21,16 @@ pub struct Sqlite {
     test_mode: bool,
 }
 
-impl TransactionalExecutor for Sqlite {
-    fn with_connection<'a, F, T>(&self, db_name: &str, f: F) -> ConnectorResult<T>
+impl Transactional for Sqlite {
+    fn with_transaction<F, T>(&self, db: &str, f: F) -> ConnectorResult<T>
     where
-        F: FnOnce(&mut Connection) -> ConnectorResult<T>,
+        F: FnOnce(&mut Transaction) -> ConnectorResult<T>,
     {
-        let mut conn = self.pool.get()?;
-        self.attach_database(&mut conn, db_name)?;
-
-        let result = f(&mut conn);
-        if self.test_mode {
-            conn.execute("DETACH DATABASE ?", &[db_name])?;
-        }
-
-        result
-    }
-
-    fn with_transaction<F, T>(&self, db_name: &str, f: F) -> ConnectorResult<T>
-    where
-        F: FnOnce(&Transaction) -> ConnectorResult<T>,
-    {
-        self.with_connection(db_name, |conn| {
-            let tx = conn.transaction()?;
+        self.with_connection(db, |ref mut conn| {
+            let mut tx = conn.transaction()?;
             tx.set_prepared_statement_cache_capacity(65536);
 
-            let result = f(&tx);
+            let result = f(&mut tx);
 
             if result.is_ok() {
                 tx.commit()?;
@@ -52,6 +38,44 @@ impl TransactionalExecutor for Sqlite {
 
             result
         })
+    }
+}
+
+impl<'a> Transaction for SqliteTransaction<'a> {
+    fn write(&mut self, q: Query) -> ConnectorResult<WriteItems> {
+        let (sql, params) = visitor::Sqlite::build(q);
+        let mut stmt = self.prepare_cached(&sql)?;
+
+        Ok(WriteItems {
+            count: stmt.execute(params)? as usize,
+            last_id: self.last_insert_rowid() as usize,
+        })
+    }
+
+    fn filter(&mut self, q: Select, idents: &[TypeIdentifier]) -> ConnectorResult<Vec<PrismaRow>> {
+        let (sql, params) = visitor::Sqlite::build(q);
+
+        let mut stmt = self.prepare_cached(&sql)?;
+        let mut rows = stmt.query(params)?;
+        let mut result = Vec::new();
+
+        while let Some(row) = rows.next() {
+            result.push(row?.to_prisma_row(idents)?);
+        }
+
+        Ok(result)
+    }
+
+    fn truncate(&mut self, project: ProjectRef) -> ConnectorResult<()> {
+        self.write(Query::from("PRAGMA foreign_keys = OFF"))?;
+
+        for delete in MutationBuilder::truncate_tables(project) {
+            self.delete(delete)?;
+        }
+
+        self.write(Query::from("PRAGMA foreign_keys = ON"))?;
+
+        Ok(())
     }
 }
 
@@ -95,79 +119,19 @@ impl Sqlite {
         Ok(())
     }
 
-    pub fn without_foreign_key_checks<F, T>(conn: &Transaction, f: F) -> ConnectorResult<T>
+    fn with_connection<F, T>(&self, db: &str, f: F) -> ConnectorResult<T>
     where
-        F: FnOnce() -> ConnectorResult<T>,
+        F: FnOnce(&mut Connection) -> ConnectorResult<T>,
     {
-        conn.execute("PRAGMA foreign_keys = OFF", NO_PARAMS)?;
-        let res = f()?;
-        conn.execute("PRAGMA foreign_keys = ON", NO_PARAMS)?;
-        Ok(res)
-    }
+        let mut conn = self.pool.get()?;
+        self.attach_database(&mut conn, db)?;
 
-    /// If querying a single integer, such as a `COUNT()`, the function will get
-    /// the first column with the default value being `0`.
-    pub fn fetch_int(row: &Row) -> i64 {
-        row.get_checked(0).unwrap_or(0)
-    }
+        let result = f(&mut conn);
 
-    pub fn fetch_id(row: &Row) -> ConnectorResult<GraphqlId> {
-        Ok(row.get_checked(0)?)
-    }
-
-    /// Read and cast a `Row` into a `Record`, casting the columns from the
-    /// `DataModel` definitions.
-    pub fn read_row(row: &Row, selected_fields: &SelectedFields) -> ConnectorResult<Node> {
-        let mut fields = Vec::new();
-
-        for (i, typid) in selected_fields.type_identifiers().iter().enumerate() {
-            fields.push(Self::fetch_value(*typid, &row, i)?);
+        if self.test_mode {
+            conn.execute("DETACH DATABASE ?", &[db])?;
         }
 
-        Ok(Node::new(fields))
-    }
-
-    /// Converter function to wrap the limited set of types in SQLite to the internal `PrismaValue`
-    /// definition.
-    pub fn fetch_value(typ: TypeIdentifier, row: &Row, i: usize) -> ConnectorResult<PrismaValue> {
-        let result = match typ {
-            TypeIdentifier::String => row.get_checked(i).map(|val| PrismaValue::String(val)),
-            TypeIdentifier::GraphQLID => row.get_checked(i).map(|val| PrismaValue::GraphqlId(val)),
-            TypeIdentifier::UUID => {
-                let result: Result<String, rusqlite::Error> = row.get_checked(i);
-
-                if let Ok(val) = result {
-                    let uuid = Uuid::parse_str(val.as_ref())?;
-                    Ok(PrismaValue::Uuid(uuid))
-                } else {
-                    result.map(|s| PrismaValue::String(s))
-                }
-            }
-            TypeIdentifier::Int => row.get_checked(i).map(|val| PrismaValue::Int(val)),
-            TypeIdentifier::Boolean => row.get_checked(i).map(|val| PrismaValue::Boolean(val)),
-            TypeIdentifier::Enum => row.get_checked(i).map(|val| PrismaValue::Enum(val)),
-            TypeIdentifier::Json => row.get_checked(i).and_then(|val| {
-                let val: String = val;
-                serde_json::from_str(&val)
-                    .map(|r| PrismaValue::Json(r))
-                    .map_err(|err| RusqliteError::FromSqlConversionFailure(i as usize, Type::Text, Box::new(err)))
-            }),
-            TypeIdentifier::DateTime => row.get_checked(i).map(|ts: i64| {
-                let nsecs = ((ts % 1000) * 1_000_000) as u32;
-                let secs = (ts / 1000) as i64;
-                let naive = chrono::NaiveDateTime::from_timestamp(secs, nsecs);
-                let datetime: DateTime<Utc> = DateTime::from_utc(naive, Utc);
-
-                PrismaValue::DateTime(datetime)
-            }),
-            TypeIdentifier::Relation => row.get_checked(i).map(|val| PrismaValue::GraphqlId(val)),
-            TypeIdentifier::Float => row.get_checked(i).map(|val: f64| PrismaValue::Float(val)),
-        };
-
-        match result {
-            Err(rusqlite::Error::InvalidColumnType(_, rusqlite::types::Type::Null)) => Ok(PrismaValue::Null),
-            Ok(pv) => Ok(pv),
-            Err(e) => Err(e.into()),
-        }
+        result
     }
 }

@@ -1,10 +1,9 @@
-use crate::mutaction::NestedActions;
+use crate::{mutaction::NestedActions, Transaction};
 use connector::{
     filter::{Filter, NodeSelector},
     ConnectorResult,
 };
-use prisma_models::{GraphqlId, ModelRef, ProjectRef, RelationFieldRef, SingleNode};
-use rusqlite::Transaction;
+use prisma_models::{GraphqlId, ModelRef, RelationFieldRef, SingleNode};
 
 /// Functions to delete records from the database.
 ///
@@ -59,7 +58,7 @@ pub trait DatabaseDelete {
     ///
     /// assert_eq!(0, Sqlite::count(&trans, "User", ConditionTree::NoCondition).unwrap());
     /// ```
-    fn execute_delete(conn: &Transaction, node_selector: &NodeSelector) -> ConnectorResult<SingleNode>;
+    fn execute_delete(conn: &mut Transaction, node_selector: &NodeSelector) -> ConnectorResult<SingleNode>;
 
     /// A top level delete that removes records matching the `Filter`. Violating
     /// any relations will cause an error.
@@ -108,7 +107,7 @@ pub trait DatabaseDelete {
     /// assert_eq!(2, Sqlite::execute_delete_many(&trans, user, &filter).unwrap());
     /// assert_eq!(1, Sqlite::count(&trans, "User", ConditionTree::NoCondition).unwrap());
     /// ```
-    fn execute_delete_many(conn: &Transaction, model: ModelRef, filter: &Filter) -> ConnectorResult<usize>;
+    fn execute_delete_many(conn: &mut Transaction, model: ModelRef, filter: &Filter) -> ConnectorResult<usize>;
 
     /// A nested delete that removes one item related to the given `parent_id`.
     /// If no `RecordFinder` is given, will delete the first item from the
@@ -199,7 +198,7 @@ pub trait DatabaseDelete {
     /// assert_eq!(1, Sqlite::count(&trans, "Site", ConditionTree::NoCondition).unwrap());
     /// ```
     fn execute_nested_delete(
-        conn: &Transaction,
+        conn: &mut Transaction,
         parent_id: &GraphqlId,
         nested_actions: &NestedActions,
         node_selector: &Option<NodeSelector>,
@@ -283,12 +282,9 @@ pub trait DatabaseDelete {
     /// assert_eq!(1, Sqlite::count(&trans, "Site", ConditionTree::NoCondition).unwrap());
     /// ```
     fn execute_nested_delete_many(
-        conn: &Transaction,
+        conn: &mut Transaction,
         parent_id: &GraphqlId,
         filter: &Option<Filter>,
         relation_field: RelationFieldRef,
     ) -> ConnectorResult<usize>;
-
-    /// Truncates all tables from the project.
-    fn execute_reset_data(conn: &Transaction, project: ProjectRef) -> ConnectorResult<()>;
 }

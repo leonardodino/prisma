@@ -9,67 +9,62 @@ pub use relation::*;
 pub use update::*;
 
 use crate::*;
-use connector::{mutaction::*, ConnectorResult};
+use connector::{error::ConnectorError, mutaction::*, ConnectorResult};
 use prisma_models::GraphqlId;
-use prisma_query::{
-    ast::Query,
-    visitor::{self, Visitor},
-};
-use rusqlite::Transaction;
 use std::sync::Arc;
 
 impl DatabaseWrite for Sqlite {
-    fn execute_nested(conn: &Transaction, mutactions: &NestedMutactions, parent_id: &GraphqlId) -> ConnectorResult<()> {
-        let create = |create_node: &NestedCreateNode| -> ConnectorResult<()> {
-            let parent_id = Self::execute_nested_create(
+    fn execute_nested(
+        conn: &mut Transaction,
+        mutactions: &NestedMutactions,
+        parent_id: &GraphqlId,
+    ) -> ConnectorResult<()> {
+        fn create(conn: &mut Transaction, parent_id: &GraphqlId, cn: &NestedCreateNode) -> ConnectorResult<()> {
+            let parent_id = Sqlite::execute_nested_create(
                 conn,
                 parent_id,
-                create_node,
-                Arc::clone(&create_node.relation_field),
-                &create_node.non_list_args,
-                &create_node.list_args,
+                cn,
+                Arc::clone(&cn.relation_field),
+                &cn.non_list_args,
+                &cn.list_args,
             )?;
 
-            Self::execute_nested(conn, &create_node.nested_mutactions, &parent_id)?;
+            Sqlite::execute_nested(conn, &cn.nested_mutactions, &parent_id)?;
 
             Ok(())
-        };
+        }
 
-        let update = |update_node: &NestedUpdateNode| -> ConnectorResult<()> {
-            let parent_id = Self::execute_nested_update(
+        fn update(conn: &mut Transaction, parent_id: &GraphqlId, un: &NestedUpdateNode) -> ConnectorResult<()> {
+            let parent_id = Sqlite::execute_nested_update(
                 conn,
                 parent_id,
-                &update_node.where_,
-                Arc::clone(&update_node.relation_field),
-                &update_node.non_list_args,
-                &update_node.list_args,
+                &un.where_,
+                Arc::clone(&un.relation_field),
+                &un.non_list_args,
+                &un.list_args,
             )?;
 
-            Self::execute_nested(conn, &update_node.nested_mutactions, &parent_id)?;
+            Sqlite::execute_nested(conn, &un.nested_mutactions, &parent_id)?;
 
             Ok(())
-        };
+        }
 
         for create_node in mutactions.creates.iter() {
-            create(create_node)?;
+            create(conn, parent_id, create_node)?;
         }
 
         for update_node in mutactions.updates.iter() {
-            update(update_node)?;
+            update(conn, parent_id, update_node)?;
         }
 
         for upsert_node in mutactions.upserts.iter() {
-            let ids = Self::get_ids_by_parents(
-                conn,
-                Arc::clone(&upsert_node.relation_field),
-                vec![parent_id],
-                upsert_node.where_.clone(),
-            )?;
+            let id_opt =
+                conn.find_id_by_parent(Arc::clone(&upsert_node.relation_field), parent_id, &upsert_node.where_);
 
-            if ids.is_empty() {
-                create(&upsert_node.create)?;
-            } else {
-                update(&upsert_node.update)?;
+            match id_opt {
+                Ok(_) => update(conn, parent_id, &upsert_node.update)?,
+                Err(_e @ ConnectorError::NodeNotFoundForWhere(_)) => create(conn, parent_id, &upsert_node.create)?,
+                Err(e) => return Err(e),
             }
         }
 
@@ -119,27 +114,6 @@ impl DatabaseWrite for Sqlite {
                 &delete_many.filter,
                 Arc::clone(&delete_many.relation_field),
             )?;
-        }
-
-        Ok(())
-    }
-
-    fn execute_one<T>(conn: &Transaction, query: T) -> ConnectorResult<()>
-    where
-        T: Into<Query>,
-    {
-        let (sql, params) = dbg!(visitor::Sqlite::build(query));
-        conn.prepare_cached(&sql)?.execute(&params)?;
-
-        Ok(())
-    }
-
-    fn execute_many<T>(conn: &Transaction, queries: Vec<T>) -> ConnectorResult<()>
-    where
-        T: Into<Query>,
-    {
-        for query in queries {
-            Self::execute_one(conn, query)?;
         }
 
         Ok(())

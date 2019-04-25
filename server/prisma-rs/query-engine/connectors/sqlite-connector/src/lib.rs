@@ -15,19 +15,19 @@
 //! The implementation is currently only for [SQLite](struct.Sqlite.html).
 
 mod cursor_condition;
-mod database_read;
 mod database_write;
 mod filter_conversion;
 mod mutaction;
 mod ordering;
 mod query_builder;
+mod row;
 mod sqlite;
-mod transactional_executor;
+mod transaction;
 
-pub use database_read::*;
 pub use database_write::*;
 pub use filter_conversion::*;
 pub use mutaction::*;
 pub use query_builder::SelectDefinition;
+pub use row::*;
 pub use sqlite::*;
-pub use transactional_executor::*;
+pub use transaction::*;

@@ -1,7 +1,6 @@
-use crate::mutaction::NestedActions;
+use crate::{mutaction::NestedActions, Transaction};
 use connector::ConnectorResult;
 use prisma_models::{GraphqlId, ModelRef, PrismaArgs, PrismaListValue, RelationFieldRef};
-use rusqlite::Transaction;
 
 /// Functions to create new records to the database.
 pub trait DatabaseCreate {
@@ -44,7 +43,7 @@ pub trait DatabaseCreate {
     /// );
     /// ```
     fn execute_create<T>(
-        conn: &Transaction,
+        conn: &mut Transaction,
         model: ModelRef,
         non_list_args: &PrismaArgs,
         list_args: &[(T, PrismaListValue)],
@@ -125,7 +124,7 @@ pub trait DatabaseCreate {
     /// );
     /// ```
     fn execute_nested_create<T>(
-        conn: &Transaction,
+        conn: &mut Transaction,
         parent_id: &GraphqlId,
         actions: &NestedActions,
         relation_field: RelationFieldRef,
